@@ -1,47 +1,41 @@
-# 📻 orecchiette-sdr-hackrf-rs: HackRF One Interface
+# orecchiette-sdr-hackrf-rs
 
 [![CI](https://github.com/isaacbentley/orecchiette-sdr-hackrf-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/isaacbentley/orecchiette-sdr-hackrf-rs/actions/workflows/ci.yml)
-[![MSRV](https://img.shields.io/badge/rustc-1.85+-ab6000.svg)](https://blog.rust-lang.org/2025/02/20/Rust-1.85.0.html)
+[![License: GPL-3.0-or-later](https://img.shields.io/github/license/isaacbentley/orecchiette-sdr-hackrf-rs.svg)](https://choosealicense.com/licenses/gpl-3.0/)
 
-A pure-Rust implementation of the [`SdrSource`](https://github.com/isaacbentley/orecchiette-sdr-source-rs) trait for the Great Scott Gadgets **HackRF One**. This crate enables seamless integration of HackRF hardware into the SDR detection applications SDR orchestrator, supporting high-speed IQ capture, dynamic channel hopping, and adaptive dwell strategies.
+A pure-Rust implementation of the [`SdrSource`](https://github.com/isaacbentley/orecchiette-sdr-source-rs) trait for the Great Scott Gadgets **HackRF One**. This crate enables seamless integration of HackRF hardware into an SDR detection orchestrator, supporting high-speed IQ capture, dynamic channel hopping, and adaptive dwell strategies.
 
-## 🎯 **Why orecchiette-sdr-hackrf-rs?**
+## Overview
 
-**The Problem:** Traditional SDR integrations often require complex C-libraries (like `libhackrf` and `libusb`) which complicate cross-platform deployment and CI/CD pipelines.
+Traditional SDR integrations often require complex C libraries (like `libhackrf` and `libusb`) which complicate cross-platform deployment and CI/CD pipelines. `hackrfone` v0.4 talks to the device over USB via `nusb` (pure Rust), so neither `libhackrf` nor `libusb` is required to build or run — the crate builds cleanly on macOS, Linux, and Windows with no system dependencies.
 
+## Key Features
 
-## 🚀 **Features**
+- **Pure-Rust Architecture:** Zero C dependencies, memory-safe throughout, no build-time system library requirements.
+- **Complete Gain Management:** Fine-grained control over LNA (IF) gain, VGA (baseband) gain, and the +14 dB front-end RF amplifier.
+- **Bias-Tee Support:** Configurable antenna-port DC power for active antennas or external LNAs.
+- **Adaptive Channel Hopping:** Automatically retunes across frequency lists with integrated per-hop pacing using `DwellController`.
+- **Automatic IQ Scaling:** Transparently scales raw 8-bit signed IQ data to `Complex32` in `[-1, 1)` to match the orchestrator's common `IqPacket` format.
 
-### **🎯 Pure-Rust Architecture**
-- **Zero C-Dependencies**: No `libhackrf` or `libusb` required.
-- **Cross-Platform**: Seamless builds on macOS (M-series optimized), Linux, and Windows.
-- **Memory Safe**: Built entirely in safe Rust with strict concurrency control.
-
-### **⚡ Advanced Device Control**
-- **Complete Gain Management**: Fine-grained control over LNA (IF) gain, VGA (baseband) gain, and the +14 dB front-end RF amplifier.
-- **Bias-Tee Support**: Configurable antenna-port DC power for active antennas or external LNAs.
-- **Adaptive Channel Hopping**: Automatically retunes across frequency lists with integrated per-hop pacing using `DwellController`.
-- **Automatic IQ Scaling**: Transparently scales raw 8-bit signed IQ data to `Complex32` in `[-1, 1)` to match the orchestrator's common `IqPacket` format.
-
-## ⚠️ **Caveats vs. the USRP backend**
+## Caveats vs. the USRP backend
 
 - **8-bit dynamic range**: ~4 fewer bits than the B210's 12-bit path — expect a noisier picture on weak signals.
 - **~20 MSPS ceiling**: HackRF One is USB 2.0; above ~20 MSPS the bulk transport drops samples. Analog FPV FM occupies ~20 MHz, so the device is right at its useful limit for full-quality video. `start` clamps any larger requested rate to `HACKRF_MAX_SAMPLE_RATE_HZ` (20 MSPS).
 - **No hardware overrun flag**: The bulk RX read surfaces no dropped-sample metadata, so `IqPacket::overrun` is always `false`; the orchestrator's overrun-driven rate step-down won't fire (drops show up as visible glitches instead).
 
-## 📦 **Installation**
+## Installation
 
-Add to your `Cargo.toml`:
+Add the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-orecchiette-sdr-hackrf-rs = { git = "https://github.com/isaacbentley/orecchiette-sdr-hackrf-rs.git", branch = "main" }
-orecchiette-sdr-source-rs = { git = "https://github.com/isaacbentley/orecchiette-sdr-source-rs.git", branch = "main" } # Common traits
+orecchiette-sdr-hackrf-rs = "0.1.0"
+orecchiette-sdr-source-rs = "0.1.0"
 ```
 
-## 🔧 **Quick Start**
+## Usage
 
-### **Basic Single-Channel Capture**
+### Basic Single-Channel Capture
 
 ```rust,no_run
 use orecchiette_sdr_hackrf_rs::HackRfSource;
@@ -83,7 +77,7 @@ for packet in handle.receiver.iter() {
 }
 ```
 
-## ⚙️ **Builder Fields**
+## Builder Fields
 
 | Field | Default | Notes |
 |---|---|---|
@@ -92,33 +86,25 @@ for packet in handle.receiver.iter() {
 | `amp_enable` | `false` | Front-end +14 dB RF amplifier. Overloads easily on strong ambient traffic. |
 | `bias_tee` | `false` | Antenna-port DC power for active antennas / external LNAs. |
 
-## 🧪 **Testing**
+## MSRV & Semver Policy
 
-```bash
-cargo test -p orecchiette-sdr-hackrf-rs
-```
+- **MSRV:** This crate does not maintain an explicit Minimum Supported Rust Version (MSRV) policy and tracks the latest `stable` compiler.
+- **Semver:** This crate follows semantic versioning. While in `0.x.y`, breaking API changes will result in a minor version bump (e.g. `0.1.x` to `0.2.0`).
+
+## Testing & Contributing
 
 Tests cover hardware instantiation, trait contract fulfillment, integration with the adaptive dwell controller, and clean shutdown behavior.
 
-## 🤝 **Contributing**
+Please see [CONTRIBUTING.md](CONTRIBUTING.md) for detailed instructions on running the test suite and formatting your code before submitting a Pull Request.
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/hackrf-enhancements`)
-3. Test your changes (`cargo test -p orecchiette-sdr-hackrf-rs`)
-4. Open a Pull Request
+## Related Projects
 
-## 🔗 **Related Projects**
+- **[fpv-viewer-rs](https://github.com/isaacbentley/fpv-viewer-rs)** — the parent SDR orchestrator.
 
-- **[SDR detection applications](https://github.com/isaacbentley/fpv-viewer-rs)** - The parent SDR orchestrator
-
-## 📚 **Documentation**
+## Documentation
 
 - [Architecture & Design](DESIGN.md) — internal architecture and execution flow.
 
-## 📄 **License**
+## License
 
-This project is licensed under the GNU General Public License v3.0 or later (GPL-3.0-or-later) - see the [LICENSE](../../LICENSE) file for details.
-
-## 📞 **Support**
-
-- 🐛 **Issues**: [GitHub Issues](https://github.com/isaacbentley/orecchiette-sdr-hackrf-rs/issues)
+This project is licensed under the GNU General Public License v3.0 or later (GPL-3.0-or-later) - see the [LICENSE](LICENSE) file for details.
