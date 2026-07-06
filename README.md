@@ -1,11 +1,11 @@
-# 📻 sdr-hackrf-rs: HackRF One Interface
+# 📻 orecchiette-sdr-hackrf-rs: HackRF One Interface
 
-[![CI](https://github.com/isaacbentley/sdr-hackrf-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/isaacbentley/sdr-hackrf-rs/actions/workflows/ci.yml)
+[![CI](https://github.com/isaacbentley/orecchiette-sdr-hackrf-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/isaacbentley/orecchiette-sdr-hackrf-rs/actions/workflows/ci.yml)
 [![MSRV](https://img.shields.io/badge/rustc-1.85+-ab6000.svg)](https://blog.rust-lang.org/2025/02/20/Rust-1.85.0.html)
 
-A pure-Rust implementation of the [`SdrSource`](https://github.com/isaacbentley/sdr-source-rs) trait for the Great Scott Gadgets **HackRF One**. This crate enables seamless integration of HackRF hardware into the SDR detection applications SDR orchestrator, supporting high-speed IQ capture, dynamic channel hopping, and adaptive dwell strategies.
+A pure-Rust implementation of the [`SdrSource`](https://github.com/isaacbentley/orecchiette-sdr-source-rs) trait for the Great Scott Gadgets **HackRF One**. This crate enables seamless integration of HackRF hardware into the SDR detection applications SDR orchestrator, supporting high-speed IQ capture, dynamic channel hopping, and adaptive dwell strategies.
 
-## 🎯 **Why sdr-hackrf-rs?**
+## 🎯 **Why orecchiette-sdr-hackrf-rs?**
 
 **The Problem:** Traditional SDR integrations often require complex C-libraries (like `libhackrf` and `libusb`) which complicate cross-platform deployment and CI/CD pipelines.
 
@@ -35,8 +35,8 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-sdr-hackrf-rs = { git = "https://github.com/isaacbentley/sdr-hackrf-rs.git", branch = "main" }
-sdr-source-rs = { git = "https://github.com/isaacbentley/sdr-source-rs.git", branch = "main" } # Common traits
+orecchiette-sdr-hackrf-rs = { git = "https://github.com/isaacbentley/orecchiette-sdr-hackrf-rs.git", branch = "main" }
+orecchiette-sdr-source-rs = { git = "https://github.com/isaacbentley/orecchiette-sdr-source-rs.git", branch = "main" } # Common traits
 ```
 
 ## 🔧 **Quick Start**
@@ -44,8 +44,8 @@ sdr-source-rs = { git = "https://github.com/isaacbentley/sdr-source-rs.git", bra
 ### **Basic Single-Channel Capture**
 
 ```rust,no_run
-use sdr_hackrf_rs::HackRfSource;
-use sdr_source_rs::{DwellAdvice, SdrSource, SourceConfig};
+use orecchiette_sdr_hackrf_rs::HackRfSource;
+use orecchiette_sdr_source_rs::{DwellAdvice, SdrSource, SourceConfig};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -95,7 +95,7 @@ for packet in handle.receiver.iter() {
 ## 🧪 **Testing**
 
 ```bash
-cargo test -p sdr-hackrf-rs
+cargo test -p orecchiette-sdr-hackrf-rs
 ```
 
 Tests cover hardware instantiation, trait contract fulfillment, integration with the adaptive dwell controller, and clean shutdown behavior.
@@ -104,12 +104,12 @@ Tests cover hardware instantiation, trait contract fulfillment, integration with
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/hackrf-enhancements`)
-3. Test your changes (`cargo test -p sdr-hackrf-rs`)
+3. Test your changes (`cargo test -p orecchiette-sdr-hackrf-rs`)
 4. Open a Pull Request
 
 ## 🔗 **Related Projects**
 
-- **[SDR detection applications](https://github.com/isaacbentley/sdr-hackrf-rs)** - The parent SDR orchestrator
+- **[SDR detection applications](https://github.com/isaacbentley/orecchiette-sdr-hackrf-rs)** - The parent SDR orchestrator
 
 ## 📚 **Documentation**
 
@@ -121,4 +121,4 @@ This project is licensed under the GNU General Public License v3.0 or later (GPL
 
 ## 📞 **Support**
 
-- 🐛 **Issues**: [GitHub Issues](https://github.com/isaacbentley/sdr-hackrf-rs/issues)
+- 🐛 **Issues**: [GitHub Issues](https://github.com/isaacbentley/orecchiette-sdr-hackrf-rs/issues)

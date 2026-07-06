@@ -1,7 +1,7 @@
 #![doc = include_str!("../README.md")]
 //! HackRF One SDR source for SDR applications.
 //!
-//! Implements [`sdr_source_rs::SdrSource`] for the Great Scott Gadgets
+//! Implements [`orecchiette_sdr_source_rs::SdrSource`] for the Great Scott Gadgets
 //! HackRF One, using the pure-Rust [`hackrfone`] driver (USB via `nusb`
 //! — no `libhackrf` *or* libusb C library needed, so it builds and runs
 //! with zero system dependencies). Owns the device handle, the
@@ -29,7 +29,7 @@
 use crossbeam::channel;
 use hackrfone::HackRfOne;
 use num_complex::Complex32;
-use sdr_source_rs::{
+use orecchiette_sdr_source_rs::{
     DwellAdvice, DwellController, IqPacket, SdrError, SdrHandle, SdrSource, SourceConfig,
     freq_key_khz,
 };
@@ -226,10 +226,11 @@ impl SdrSource for HackRfSource {
                                 }));
                                 if !samples.is_empty() {
                                     let pkt = IqPacket {
-                                        samples: sdr_source_rs::PooledIqBuffer::new_pooled(
-                                            samples,
-                                            pool_tx.clone(),
-                                        ),
+                                        samples:
+                                            orecchiette_sdr_source_rs::PooledIqBuffer::new_pooled(
+                                                samples,
+                                                pool_tx.clone(),
+                                            ),
                                         center_frequency_hz: current_freq_hz,
                                         sample_rate_hz: sample_rate_f32,
                                         overrun: false,

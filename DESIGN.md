@@ -1,6 +1,6 @@
-# Design: HackRF One Interface (sdr-hackrf-rs)
+# Design: HackRF One Interface (orecchiette-sdr-hackrf-rs)
 
-This document details the architecture of the `sdr-hackrf-rs` crate, a pure-Rust implementation of the SDR detection applications SDR abstraction layer for the Great Scott Gadgets HackRF One.
+This document details the architecture of the `orecchiette-sdr-hackrf-rs` crate, a pure-Rust implementation of the SDR detection applications SDR abstraction layer for the Great Scott Gadgets HackRF One.
 
 ## 1. Introduction
 
