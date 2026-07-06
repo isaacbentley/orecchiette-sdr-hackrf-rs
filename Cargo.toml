@@ -3,12 +3,14 @@ name = "orecchiette-sdr-hackrf-rs"
 license = "GPL-3.0-or-later"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
-
 description = "HackRF One implementation of the SdrSource trait."
+repository = "https://github.com/isaacbentley/orecchiette-sdr-hackrf-rs"
+readme = "README.md"
+keywords = ["sdr", "hackrf", "rf", "iq", "usb"]
+categories = ["hardware-support", "api-bindings"]
 
 [dependencies]
-orecchiette-sdr-source-rs = { git = "https://github.com/isaacbentley/orecchiette-sdr-source-rs.git", branch = "main" }
+orecchiette-sdr-source-rs = "0.1.0"
 # Pure-Rust HackRF One driver. v0.4 talks USB via `nusb` (pure Rust),
 # so there's no system C-library dependency at all — neither libhackrf
 # nor libusb is required to build or run.
