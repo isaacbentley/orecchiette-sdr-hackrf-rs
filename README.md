@@ -109,7 +109,7 @@ Tests cover hardware instantiation, trait contract fulfillment, integration with
 
 ## 🔗 **Related Projects**
 
-- **[SDR detection applications](https://github.com/isaacbentley/orecchiette-sdr-hackrf-rs)** - The parent SDR orchestrator
+- **[SDR detection applications](https://github.com/isaacbentley/fpv-viewer-rs)** - The parent SDR orchestrator
 
 ## 📚 **Documentation**
 
