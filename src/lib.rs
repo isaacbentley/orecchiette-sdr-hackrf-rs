@@ -211,7 +211,7 @@ impl SdrSource for HackRfSource {
                                 tracing::warn!("[hackrf] into_rx_mode failed for {} Hz: {:?}. Attempting to re-open/recreate device.", current_freq_hz, e);
                                 consecutive_failures += 1;
                                 thread::sleep(Duration::from_millis(100));
-                                if let Some(new_radio) = hackrfone::HackRfOne::new() {
+                                if let Some(mut new_radio) = hackrfone::HackRfOne::new() {
                                     if let Err(e2) = new_radio.set_sample_rate(sample_rate as u32, 1) {
                                         tracing::error!("[hackrf] Failed to re-set sample rate: {:?}", e2);
                                     }
