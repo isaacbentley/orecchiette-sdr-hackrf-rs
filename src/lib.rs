@@ -191,7 +191,9 @@ impl SdrSource for HackRfSource {
                         }
 
                         if consecutive_failures >= num_channels {
-                            tracing::warn!("[hackrf] All channels failed consecutively. Sleeping for 500ms before retrying.");
+                            tracing::warn!(
+                                "[hackrf] All channels failed consecutively. Sleeping for 500ms before retrying."
+                            );
                             thread::sleep(Duration::from_millis(500));
                             consecutive_failures = 0;
                         }
@@ -199,7 +201,10 @@ impl SdrSource for HackRfSource {
                         if device_opt.is_none() {
                             if let Some(mut new_radio) = hackrfone::HackRfOne::new() {
                                 if let Err(e2) = new_radio.set_sample_rate(sample_rate as u32, 1) {
-                                    tracing::error!("[hackrf] Failed to re-set sample rate: {:?}", e2);
+                                    tracing::error!(
+                                        "[hackrf] Failed to re-set sample rate: {:?}",
+                                        e2
+                                    );
                                 }
                                 if let Err(e2) = new_radio.set_lna_gain(lna_gain) {
                                     tracing::error!("[hackrf] Failed to re-set LNA gain: {:?}", e2);
@@ -208,14 +213,22 @@ impl SdrSource for HackRfSource {
                                     tracing::error!("[hackrf] Failed to re-set VGA gain: {:?}", e2);
                                 }
                                 if let Err(e2) = new_radio.set_amp_enable(amp_enable) {
-                                    tracing::error!("[hackrf] Failed to re-set amp enable: {:?}", e2);
+                                    tracing::error!(
+                                        "[hackrf] Failed to re-set amp enable: {:?}",
+                                        e2
+                                    );
                                 }
                                 if let Err(e2) = new_radio.set_antenna_enable(bias_tee as u8) {
-                                    tracing::error!("[hackrf] Failed to re-set antenna enable: {:?}", e2);
+                                    tracing::error!(
+                                        "[hackrf] Failed to re-set antenna enable: {:?}",
+                                        e2
+                                    );
                                 }
                                 device_opt = Some(new_radio);
                             } else {
-                                tracing::error!("[hackrf] Failed to re-open HackRF device. Retrying in 100ms.");
+                                tracing::error!(
+                                    "[hackrf] Failed to re-open HackRF device. Retrying in 100ms."
+                                );
                                 thread::sleep(Duration::from_millis(100));
                                 consecutive_failures += 1;
                                 channel_idx = (channel_idx + 1) % num_channels;
@@ -227,7 +240,11 @@ impl SdrSource for HackRfSource {
                         let current_freq_hz = channels_hz[channel_idx];
                         let freq_key = freq_key_khz(current_freq_hz);
                         if let Err(e) = device.set_freq(current_freq_hz as u64) {
-                            tracing::warn!("[hackrf] Failed to set frequency to {} Hz: {:?}. Skipping channel.", current_freq_hz, e);
+                            tracing::warn!(
+                                "[hackrf] Failed to set frequency to {} Hz: {:?}. Skipping channel.",
+                                current_freq_hz,
+                                e
+                            );
                             device_opt = Some(device);
                             consecutive_failures += 1;
                             channel_idx = (channel_idx + 1) % num_channels;
@@ -237,24 +254,45 @@ impl SdrSource for HackRfSource {
                         let mut rx = match device.into_rx_mode() {
                             Ok(r) => r,
                             Err(e) => {
-                                tracing::warn!("[hackrf] into_rx_mode failed for {} Hz: {:?}. Attempting to re-open/recreate device.", current_freq_hz, e);
+                                tracing::warn!(
+                                    "[hackrf] into_rx_mode failed for {} Hz: {:?}. Attempting to re-open/recreate device.",
+                                    current_freq_hz,
+                                    e
+                                );
                                 consecutive_failures += 1;
                                 thread::sleep(Duration::from_millis(100));
                                 if let Some(mut new_radio) = hackrfone::HackRfOne::new() {
-                                    if let Err(e2) = new_radio.set_sample_rate(sample_rate as u32, 1) {
-                                        tracing::error!("[hackrf] Failed to re-set sample rate: {:?}", e2);
+                                    if let Err(e2) =
+                                        new_radio.set_sample_rate(sample_rate as u32, 1)
+                                    {
+                                        tracing::error!(
+                                            "[hackrf] Failed to re-set sample rate: {:?}",
+                                            e2
+                                        );
                                     }
                                     if let Err(e2) = new_radio.set_lna_gain(lna_gain) {
-                                        tracing::error!("[hackrf] Failed to re-set LNA gain: {:?}", e2);
+                                        tracing::error!(
+                                            "[hackrf] Failed to re-set LNA gain: {:?}",
+                                            e2
+                                        );
                                     }
                                     if let Err(e2) = new_radio.set_vga_gain(vga_gain) {
-                                        tracing::error!("[hackrf] Failed to re-set VGA gain: {:?}", e2);
+                                        tracing::error!(
+                                            "[hackrf] Failed to re-set VGA gain: {:?}",
+                                            e2
+                                        );
                                     }
                                     if let Err(e2) = new_radio.set_amp_enable(amp_enable) {
-                                        tracing::error!("[hackrf] Failed to re-set amp enable: {:?}", e2);
+                                        tracing::error!(
+                                            "[hackrf] Failed to re-set amp enable: {:?}",
+                                            e2
+                                        );
                                     }
                                     if let Err(e2) = new_radio.set_antenna_enable(bias_tee as u8) {
-                                        tracing::error!("[hackrf] Failed to re-set antenna enable: {:?}", e2);
+                                        tracing::error!(
+                                            "[hackrf] Failed to re-set antenna enable: {:?}",
+                                            e2
+                                        );
                                     }
                                     device_opt = Some(new_radio);
                                 } else {
