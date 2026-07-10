@@ -160,116 +160,167 @@ impl SdrSource for HackRfSource {
         let advice_thread = advice;
         let sample_rate_f32 = sample_rate as f32;
 
-        let (pool_tx, pool_rx) = channel::bounded::<Vec<Complex32>>(256);
-        for _ in 0..256 {
+        let (pool_tx, pool_rx) = channel::bounded::<Vec<Complex32>>(1024);
+        for _ in 0..1024 {
             let _ = pool_tx.send(Vec::with_capacity(131072));
         }
 
+        let lna_gain = self.lna_gain;
+        let vga_gain = self.vga_gain;
+        let amp_enable = self.amp_enable;
+        let bias_tee = self.bias_tee;
+
         let capture_thread = thread::spawn(move || {
-            if let Err(e) = (move || -> Result<(), anyhow::Error> {
-                // The HackRF typestate puts `set_freq` on `UnknownMode` and
-                // `rx` on `RxMode`, so we thread the single device handle
-                // through `into_rx_mode` / `stop_rx` around each hop. For
-                // the common single-channel viewer case (`channels_hz.len()
-                // == 1`, dwell ~forever) the outer loop runs once and we
-                // just stream.
-                let mut device = radio; // HackRfOne<UnknownMode>
-                let mut channel_idx = 0usize;
-                let mut last_report = Instant::now();
-                let mut channel_switches = 0u64;
+            let panic_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                if let Err(e) = (move || -> Result<(), anyhow::Error> {
+                    // The HackRF typestate puts `set_freq` on `UnknownMode` and
+                    // `rx` on `RxMode`, so we thread the single device handle
+                    // through `into_rx_mode` / `stop_rx` around each hop. For
+                    // the common single-channel viewer case (`channels_hz.len()
+                    // == 1`, dwell ~forever) the outer loop runs once and we
+                    // just stream.
+                    let mut device = radio; // HackRfOne<UnknownMode>
+                    let mut channel_idx = 0usize;
+                    let mut last_report = Instant::now();
+                    let mut channel_switches = 0u64;
+                    let mut consecutive_failures = 0;
 
-                'outer: loop {
-                    if stop_flag_thread.load(Ordering::SeqCst) {
-                        break;
-                    }
-                    let current_freq_hz = channels_hz[channel_idx];
-                    let freq_key = freq_key_khz(current_freq_hz);
-                    device
-                        .set_freq(current_freq_hz as u64)
-                        .map_err(|e| anyhow::anyhow!("set_freq({current_freq_hz}): {e:?}"))?;
-
-                    let mut rx = device
-                        .into_rx_mode()
-                        .map_err(|e| anyhow::anyhow!("into_rx_mode: {e:?}"))?;
-
-                    let dwell_start = Instant::now();
-                    // The loop yields the device back in `UnknownMode` (via
-                    // `stop_rx`) so the next hop can retune it.
-                    device = loop {
+                    'outer: loop {
                         if stop_flag_thread.load(Ordering::SeqCst) {
-                            break rx
-                                .stop_rx()
-                                .map_err(|e| anyhow::anyhow!("stop_rx: {e:?}"))?;
-                        }
-                        let latest_signal = advice_thread.latest_signal_at(freq_key);
-                        let deadline = dwell_controller.deadline(dwell_start, latest_signal);
-                        if Instant::now() >= deadline {
-                            break rx
-                                .stop_rx()
-                                .map_err(|e| anyhow::anyhow!("stop_rx: {e:?}"))?;
+                            break;
                         }
 
-                        match rx.rx() {
-                            Ok(bytes) => {
-                                // Interleaved signed 8-bit I, Q → Complex32 in
-                                // [-1, 1). `chunks_exact(2)` drops a trailing
-                                // odd byte (never expected from the device).
-                                let mut samples = pool_rx
-                                    .try_recv()
-                                    .unwrap_or_else(|_| Vec::with_capacity(131072));
-                                samples.clear();
-                                samples.extend(bytes.chunks_exact(2).map(|c| {
-                                    Complex32::new(
-                                        (c[0] as i8) as f32 / 127.0,
-                                        (c[1] as i8) as f32 / 127.0,
-                                    )
-                                }));
-                                if !samples.is_empty() {
-                                    let pkt = IqPacket {
-                                        samples:
-                                            orecchiette_sdr_source_rs::PooledIqBuffer::new_pooled(
-                                                samples,
-                                                pool_tx.clone(),
-                                            ),
-                                        center_frequency_hz: current_freq_hz,
-                                        sample_rate_hz: sample_rate_f32,
-                                        overrun: false,
-                                    };
-                                    if tx.send(pkt).is_err() {
-                                        // Receiver dropped — wind down.
-                                        let _ = rx.stop_rx();
-                                        break 'outer;
-                                    }
-                                }
-                            }
+                        if consecutive_failures >= num_channels {
+                            tracing::warn!("[hackrf] All channels failed consecutively. Sleeping for 500ms before retrying.");
+                            thread::sleep(Duration::from_millis(500));
+                            consecutive_failures = 0;
+                        }
+
+                        let current_freq_hz = channels_hz[channel_idx];
+                        let freq_key = freq_key_khz(current_freq_hz);
+                        if let Err(e) = device.set_freq(current_freq_hz as u64) {
+                            tracing::warn!("[hackrf] Failed to set frequency to {} Hz: {:?}. Skipping channel.", current_freq_hz, e);
+                            consecutive_failures += 1;
+                            channel_idx = (channel_idx + 1) % num_channels;
+                            continue;
+                        }
+
+                        let mut rx = match device.into_rx_mode() {
+                            Ok(r) => r,
                             Err(e) => {
-                                // A transient USB read error ends this dwell;
-                                // the outer loop retunes and re-enters RX.
-                                tracing::warn!("[hackrf] rx error: {e:?}");
+                                tracing::warn!("[hackrf] into_rx_mode failed for {} Hz: {:?}. Attempting to re-open/recreate device.", current_freq_hz, e);
+                                consecutive_failures += 1;
+                                thread::sleep(Duration::from_millis(100));
+                                if let Some(new_radio) = hackrfone::HackRfOne::new() {
+                                    if let Err(e2) = new_radio.set_sample_rate(sample_rate as u32, 1) {
+                                        tracing::error!("[hackrf] Failed to re-set sample rate: {:?}", e2);
+                                    }
+                                    if let Err(e2) = new_radio.set_lna_gain(lna_gain) {
+                                        tracing::error!("[hackrf] Failed to re-set LNA gain: {:?}", e2);
+                                    }
+                                    if let Err(e2) = new_radio.set_vga_gain(vga_gain) {
+                                        tracing::error!("[hackrf] Failed to re-set VGA gain: {:?}", e2);
+                                    }
+                                    if let Err(e2) = new_radio.set_amp_enable(amp_enable) {
+                                        tracing::error!("[hackrf] Failed to re-set amp enable: {:?}", e2);
+                                    }
+                                    if let Err(e2) = new_radio.set_antenna_enable(bias_tee as u8) {
+                                        tracing::error!("[hackrf] Failed to re-set antenna enable: {:?}", e2);
+                                    }
+                                    device = new_radio;
+                                } else {
+                                    tracing::error!("[hackrf] Failed to re-open HackRF device.");
+                                }
+                                channel_idx = (channel_idx + 1) % num_channels;
+                                continue;
+                            }
+                        };
+
+                        // Reset consecutive failures on successful tune/start
+                        consecutive_failures = 0;
+
+                        let dwell_start = Instant::now();
+                        // The loop yields the device back in `UnknownMode` (via
+                        // `stop_rx`) so the next hop can retune it.
+                        device = loop {
+                            if stop_flag_thread.load(Ordering::SeqCst) {
                                 break rx
                                     .stop_rx()
                                     .map_err(|e| anyhow::anyhow!("stop_rx: {e:?}"))?;
                             }
-                        }
+                            let latest_signal = advice_thread.latest_signal_at(freq_key);
+                            let deadline = dwell_controller.deadline(dwell_start, latest_signal);
+                            if Instant::now() >= deadline {
+                                break rx
+                                    .stop_rx()
+                                    .map_err(|e| anyhow::anyhow!("stop_rx: {e:?}"))?;
+                            }
 
-                        if last_report.elapsed() >= Duration::from_secs(60) {
-                            let rate =
-                                channel_switches as f32 / last_report.elapsed().as_secs_f32();
-                            info!(
-                                "[hackrf] Scanning speed: {:.1} ch/s | Pool size: {} channels",
-                                rate, num_channels
-                            );
-                            channel_switches = 0;
-                            last_report = Instant::now();
-                        }
-                    };
+                            match rx.rx() {
+                                Ok(bytes) => {
+                                    // Interleaved signed 8-bit I, Q → Complex32 in
+                                    // [-1, 1). `chunks_exact(2)` drops a trailing
+                                    // odd byte (never expected from the device).
+                                    let mut samples = pool_rx
+                                        .try_recv()
+                                        .unwrap_or_else(|_| Vec::with_capacity(131072));
+                                    samples.clear();
+                                    samples.extend(bytes.chunks_exact(2).map(|c| {
+                                        Complex32::new(
+                                            (c[0] as i8) as f32 / 127.0,
+                                            (c[1] as i8) as f32 / 127.0,
+                                        )
+                                    }));
+                                    if !samples.is_empty() {
+                                        let pkt = IqPacket {
+                                            samples:
+                                                orecchiette_sdr_source_rs::PooledIqBuffer::new_pooled(
+                                                    samples,
+                                                    pool_tx.clone(),
+                                                ),
+                                            center_frequency_hz: current_freq_hz,
+                                            sample_rate_hz: sample_rate_f32,
+                                            overrun: false,
+                                        };
+                                        if tx.send(pkt).is_err() {
+                                            // Receiver dropped — wind down.
+                                            let _ = rx.stop_rx();
+                                            break 'outer;
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    // A transient USB read error ends this dwell;
+                                    // the outer loop retunes and re-enters RX.
+                                    tracing::warn!("[hackrf] rx error: {e:?}");
+                                    break rx
+                                        .stop_rx()
+                                        .map_err(|e| anyhow::anyhow!("stop_rx: {e:?}"))?;
+                                }
+                            }
 
-                    channel_idx = (channel_idx + 1) % num_channels;
-                    channel_switches += 1;
+                            if last_report.elapsed() >= Duration::from_secs(60) {
+                                let rate =
+                                    channel_switches as f32 / last_report.elapsed().as_secs_f32();
+                                info!(
+                                    "[hackrf] Scanning speed: {:.1} ch/s | Pool size: {} channels",
+                                    rate, num_channels
+                                );
+                                channel_switches = 0;
+                                last_report = Instant::now();
+                            }
+                        };
+
+                        channel_idx = (channel_idx + 1) % num_channels;
+                        channel_switches += 1;
+                    }
+                    Ok(())
+                })() {
+                    tracing::error!("[hackrf] Capture thread failed: {:?}", e);
                 }
-                Ok(())
-            })() {
-                tracing::error!("[hackrf] Capture thread failed: {:?}", e);
+            }));
+            if let Err(e) = panic_res {
+                tracing::error!("[hackrf] Capture thread panicked: {:?}", e);
             }
         });
 
