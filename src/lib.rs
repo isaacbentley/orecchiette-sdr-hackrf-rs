@@ -179,7 +179,7 @@ impl SdrSource for HackRfSource {
                     // the common single-channel viewer case (`channels_hz.len()
                     // == 1`, dwell ~forever) the outer loop runs once and we
                     // just stream.
-                    let mut device = radio; // HackRfOne<UnknownMode>
+                    let mut device_opt = Some(radio); // Option<HackRfOne<UnknownMode>>
                     let mut channel_idx = 0usize;
                     let mut last_report = Instant::now();
                     let mut channel_switches = 0u64;
@@ -196,10 +196,39 @@ impl SdrSource for HackRfSource {
                             consecutive_failures = 0;
                         }
 
+                        if device_opt.is_none() {
+                            if let Some(mut new_radio) = hackrfone::HackRfOne::new() {
+                                if let Err(e2) = new_radio.set_sample_rate(sample_rate as u32, 1) {
+                                    tracing::error!("[hackrf] Failed to re-set sample rate: {:?}", e2);
+                                }
+                                if let Err(e2) = new_radio.set_lna_gain(lna_gain) {
+                                    tracing::error!("[hackrf] Failed to re-set LNA gain: {:?}", e2);
+                                }
+                                if let Err(e2) = new_radio.set_vga_gain(vga_gain) {
+                                    tracing::error!("[hackrf] Failed to re-set VGA gain: {:?}", e2);
+                                }
+                                if let Err(e2) = new_radio.set_amp_enable(amp_enable) {
+                                    tracing::error!("[hackrf] Failed to re-set amp enable: {:?}", e2);
+                                }
+                                if let Err(e2) = new_radio.set_antenna_enable(bias_tee as u8) {
+                                    tracing::error!("[hackrf] Failed to re-set antenna enable: {:?}", e2);
+                                }
+                                device_opt = Some(new_radio);
+                            } else {
+                                tracing::error!("[hackrf] Failed to re-open HackRF device. Retrying in 100ms.");
+                                thread::sleep(Duration::from_millis(100));
+                                consecutive_failures += 1;
+                                channel_idx = (channel_idx + 1) % num_channels;
+                                continue;
+                            }
+                        }
+
+                        let mut device = device_opt.take().unwrap();
                         let current_freq_hz = channels_hz[channel_idx];
                         let freq_key = freq_key_khz(current_freq_hz);
                         if let Err(e) = device.set_freq(current_freq_hz as u64) {
                             tracing::warn!("[hackrf] Failed to set frequency to {} Hz: {:?}. Skipping channel.", current_freq_hz, e);
+                            device_opt = Some(device);
                             consecutive_failures += 1;
                             channel_idx = (channel_idx + 1) % num_channels;
                             continue;
@@ -227,7 +256,7 @@ impl SdrSource for HackRfSource {
                                     if let Err(e2) = new_radio.set_antenna_enable(bias_tee as u8) {
                                         tracing::error!("[hackrf] Failed to re-set antenna enable: {:?}", e2);
                                     }
-                                    device = new_radio;
+                                    device_opt = Some(new_radio);
                                 } else {
                                     tracing::error!("[hackrf] Failed to re-open HackRF device.");
                                 }
@@ -242,7 +271,7 @@ impl SdrSource for HackRfSource {
                         let dwell_start = Instant::now();
                         // The loop yields the device back in `UnknownMode` (via
                         // `stop_rx`) so the next hop can retune it.
-                        device = loop {
+                        device_opt = Some(loop {
                             if stop_flag_thread.load(Ordering::SeqCst) {
                                 break rx
                                     .stop_rx()
@@ -309,7 +338,7 @@ impl SdrSource for HackRfSource {
                                 channel_switches = 0;
                                 last_report = Instant::now();
                             }
-                        };
+                        });
 
                         channel_idx = (channel_idx + 1) % num_channels;
                         channel_switches += 1;
