@@ -47,4 +47,12 @@ The HackRF operates over USB 2.0. At sample rates above 20 MSPS, the bulk transp
 - **Clamping**: The `start()` function hard-clamps requested sample rates to `20_000_000.0` Hz.
 - **Overruns**: The underlying USB bulk read implementation does not surface dropped-sample hardware flags. Consequently, `IqPacket::overrun` is permanently emitted as `false`, and overruns will manifest as silent phase discontinuities rather than triggering orchestrator-level rate step-downs.
 
+### Failure Handling
+If every channel in a sweep fails to tune or re-enter RX mode, the hop loop
+backs off 500ms and retries. After `MAX_CONSECUTIVE_SWEEP_FAILURES` (10)
+consecutive failed sweeps — meaning the device has been unresponsive for at
+least ~5 seconds — the capture thread gives up and exits instead of
+retrying forever, so `SdrHandle::wait()` eventually returns for a HackRF
+that's been unplugged.
+
 

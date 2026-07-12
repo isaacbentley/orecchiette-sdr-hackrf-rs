@@ -44,6 +44,13 @@ use tracing::info;
 /// drops samples wholesale.
 pub const HACKRF_MAX_SAMPLE_RATE_HZ: f64 = 20_000_000.0;
 
+/// After this many consecutive full sweeps where every channel fails
+/// to tune/stream (each sweep followed by a 500ms backoff sleep), give
+/// up on the device rather than retrying forever — a HackRF that's
+/// been unplugged or wedged should surface as a terminal error instead
+/// of spinning silently.
+const MAX_CONSECUTIVE_SWEEP_FAILURES: u32 = 10;
+
 /// Builder for a HackRF One source. Wrap in `Box::new(...)` and call
 /// [`SdrSource::start`] from the orchestrator.
 pub struct HackRfSource {
@@ -71,27 +78,34 @@ impl Default for HackRfSource {
     }
 }
 
+/// Validate `SourceConfig` and clamp the requested sample rate to the
+/// HackRF's USB-2.0 ceiling. Returns the clamped rate and whether
+/// clamping occurred, so the caller can log it. Kept standalone (no
+/// hardware access) so it's unit-testable ahead of `HackRfOne::new()`.
+fn resolve_sample_rate(num_channels: usize, requested_hz: f64) -> Result<(f64, bool), SdrError> {
+    if num_channels == 0 {
+        return Err(SdrError::BadConfig(
+            "SourceConfig.channels_hz must not be empty".into(),
+        ));
+    }
+    let clamped = requested_hz.min(HACKRF_MAX_SAMPLE_RATE_HZ);
+    if clamped <= 0.0 {
+        return Err(SdrError::BadConfig(format!(
+            "invalid sample rate {requested_hz} Hz"
+        )));
+    }
+    Ok((clamped, requested_hz > HACKRF_MAX_SAMPLE_RATE_HZ))
+}
+
 impl SdrSource for HackRfSource {
     fn start(
         self: Box<Self>,
         config: SourceConfig,
         advice: Arc<dyn DwellAdvice>,
     ) -> Result<SdrHandle, SdrError> {
-        if config.channels_hz.is_empty() {
-            return Err(SdrError::BadConfig(
-                "SourceConfig.channels_hz must not be empty".into(),
-            ));
-        }
-
-        // Clamp the requested rate to the HackRF's USB-2.0 ceiling.
-        let sample_rate = config.sample_rate_hz.min(HACKRF_MAX_SAMPLE_RATE_HZ);
-        if sample_rate <= 0.0 {
-            return Err(SdrError::BadConfig(format!(
-                "invalid sample rate {} Hz",
-                config.sample_rate_hz
-            )));
-        }
-        if config.sample_rate_hz > HACKRF_MAX_SAMPLE_RATE_HZ {
+        let (sample_rate, was_clamped) =
+            resolve_sample_rate(config.channels_hz.len(), config.sample_rate_hz)?;
+        if was_clamped {
             info!(
                 "[hackrf] Requested {:.2} MSPS exceeds the {:.0} MSPS USB-2.0 ceiling; clamping.",
                 config.sample_rate_hz / 1e6,
@@ -184,6 +198,7 @@ impl SdrSource for HackRfSource {
                     let mut last_report = Instant::now();
                     let mut channel_switches = 0u64;
                     let mut consecutive_failures = 0;
+                    let mut consecutive_sweep_failures = 0;
 
                     'outer: loop {
                         if stop_flag_thread.load(Ordering::SeqCst) {
@@ -191,6 +206,14 @@ impl SdrSource for HackRfSource {
                         }
 
                         if consecutive_failures >= num_channels {
+                            consecutive_sweep_failures += 1;
+                            if consecutive_sweep_failures >= MAX_CONSECUTIVE_SWEEP_FAILURES {
+                                tracing::error!(
+                                    "[hackrf] All channels failed to tune for {} consecutive sweeps. Giving up — is the HackRF still connected?",
+                                    consecutive_sweep_failures
+                                );
+                                break 'outer;
+                            }
                             tracing::warn!(
                                 "[hackrf] All channels failed consecutively. Sleeping for 500ms before retrying."
                             );
@@ -305,6 +328,7 @@ impl SdrSource for HackRfSource {
 
                         // Reset consecutive failures on successful tune/start
                         consecutive_failures = 0;
+                        consecutive_sweep_failures = 0;
 
                         let dwell_start = Instant::now();
                         // The loop yields the device back in `UnknownMode` (via
@@ -406,5 +430,36 @@ impl SdrSource for HackRfSource {
             stop,
             wait,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_sample_rate_rejects_empty_channels() {
+        let err = resolve_sample_rate(0, 10_000_000.0).unwrap_err();
+        assert!(matches!(err, SdrError::BadConfig(_)));
+    }
+
+    #[test]
+    fn resolve_sample_rate_rejects_non_positive_rate() {
+        assert!(resolve_sample_rate(1, 0.0).is_err());
+        assert!(resolve_sample_rate(1, -1.0).is_err());
+    }
+
+    #[test]
+    fn resolve_sample_rate_passes_through_under_ceiling() {
+        let (rate, clamped) = resolve_sample_rate(1, 10_000_000.0).unwrap();
+        assert_eq!(rate, 10_000_000.0);
+        assert!(!clamped);
+    }
+
+    #[test]
+    fn resolve_sample_rate_clamps_above_ceiling() {
+        let (rate, clamped) = resolve_sample_rate(1, 40_000_000.0).unwrap();
+        assert_eq!(rate, HACKRF_MAX_SAMPLE_RATE_HZ);
+        assert!(clamped);
     }
 }

@@ -91,9 +91,22 @@ for packet in handle.receiver.iter() {
 - **MSRV:** This crate does not maintain an explicit Minimum Supported Rust Version (MSRV) policy and tracks the latest `stable` compiler.
 - **Semver:** This crate follows semantic versioning. While in `0.x.y`, breaking API changes will result in a minor version bump (e.g. `0.1.x` to `0.2.0`).
 
+## Errors
+
+`start()` validates `SourceConfig` — a non-empty `channels_hz` and a positive
+sample rate after clamping to the 20 MSPS ceiling — before opening the
+device, so a bad config returns `SdrError::BadConfig` without ever touching
+hardware. Once streaming, if every channel fails to tune/stream for 10
+consecutive sweeps (~5+ seconds of an unresponsive device), the capture
+thread gives up rather than retrying forever; `SdrHandle::wait()` returns
+once that happens.
+
 ## Testing & Contributing
 
-Tests cover hardware instantiation, trait contract fulfillment, integration with the adaptive dwell controller, and clean shutdown behavior.
+4 unit tests cover the sample-rate/channel validation and clamping logic
+(the one piece of `start()` that doesn't require real hardware). The
+capture-loop retune/reconnect/dwell logic isn't unit-tested — it's
+exercised against real HackRF hardware today.
 
 Please see [CONTRIBUTING.md](CONTRIBUTING.md) for detailed instructions on running the test suite and formatting your code before submitting a Pull Request.
 
