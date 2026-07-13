@@ -198,7 +198,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "orecchiette-sdr-hackrf-rs"
-version = "0.1.1"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "crossbeam",
@@ -210,9 +210,7 @@ dependencies = [
 
 [[package]]
 name = "orecchiette-sdr-source-rs"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05fd12509fa0f71cbee933ee32e8ea4b5ab9b5ddd3fe97618f5979c8624e93ba"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "crossbeam",
