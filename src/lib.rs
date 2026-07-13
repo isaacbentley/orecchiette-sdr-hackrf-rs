@@ -190,9 +190,10 @@ impl SdrSource for HackRfSource {
                     // The HackRF typestate puts `set_freq` on `UnknownMode` and
                     // `rx` on `RxMode`, so we thread the single device handle
                     // through `into_rx_mode` / `stop_rx` around each hop. For
-                    // the common single-channel viewer case (`channels_hz.len()
-                    // == 1`, dwell ~forever) the outer loop runs once and we
-                    // just stream.
+                    // the single-channel case (`channels_hz.len() == 1`) the
+                    // dwell deadline is ignored (see the inner loop), so the
+                    // outer loop runs once and we stream continuously regardless
+                    // of the configured dwell.
                     let mut device_opt = Some(radio); // Option<HackRfOne<UnknownMode>>
                     let mut channel_idx = 0usize;
                     let mut last_report = Instant::now();
@@ -339,12 +340,24 @@ impl SdrSource for HackRfSource {
                                     .stop_rx()
                                     .map_err(|e| anyhow::anyhow!("stop_rx: {e:?}"))?;
                             }
-                            let latest_signal = advice_thread.latest_signal_at(freq_key);
-                            let deadline = dwell_controller.deadline(dwell_start, latest_signal);
-                            if Instant::now() >= deadline {
-                                break rx
-                                    .stop_rx()
-                                    .map_err(|e| anyhow::anyhow!("stop_rx: {e:?}"))?;
+                            // With a single channel there is nowhere to hop, so
+                            // never tear the RX down on the dwell deadline —
+                            // stream continuously instead. Otherwise a
+                            // single-channel caller with a short `dwell_min`
+                            // (e.g. a wideband channelizer) would stop + retune
+                            // the radio every dwell period, punching periodic
+                            // gaps into an otherwise continuous stream. Matches
+                            // the Pluto backend. The dwell deadline only gates
+                            // hopping, which needs `num_channels > 1`.
+                            if num_channels > 1 {
+                                let latest_signal = advice_thread.latest_signal_at(freq_key);
+                                let deadline =
+                                    dwell_controller.deadline(dwell_start, latest_signal);
+                                if Instant::now() >= deadline {
+                                    break rx
+                                        .stop_rx()
+                                        .map_err(|e| anyhow::anyhow!("stop_rx: {e:?}"))?;
+                                }
                             }
 
                             match rx.rx() {
