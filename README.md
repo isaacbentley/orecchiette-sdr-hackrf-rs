@@ -94,7 +94,7 @@ for packet in handle.receiver.iter() {
 ## Errors
 
 `start()` validates `SourceConfig` — a non-empty `channels_hz` and a positive
-sample rate after clamping to the 20 MSPS ceiling — before opening the
+finite sample rate of at least 1 Hz before clamping to the 20 MSPS ceiling — before opening the
 device, so a bad config returns `SdrError::BadConfig` without ever touching
 hardware. Once streaming, if every channel fails to tune/stream for 10
 consecutive sweeps (~5+ seconds of an unresponsive device), the capture
@@ -103,10 +103,7 @@ once that happens.
 
 ## Testing & Contributing
 
-4 unit tests cover the sample-rate/channel validation and clamping logic
-(the one piece of `start()` that doesn't require real hardware). The
-capture-loop retune/reconnect/dwell logic isn't unit-tested — it's
-exercised against real HackRF hardware today.
+Unit tests cover sample-rate validation and integer-Hz conversion, channel validation, IQ scaling, failure budgets, and override transitions. Retuning and recovery against a physical radio still require hardware testing.
 
 Please see [CONTRIBUTING.md](CONTRIBUTING.md) for detailed instructions on running the test suite and formatting your code before submitting a Pull Request.
 

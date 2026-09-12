@@ -86,6 +86,11 @@ fn should_abandon_device(consecutive_stream_failures: u32) -> bool {
     consecutive_stream_failures >= MAX_CONSECUTIVE_STREAM_FAILURES
 }
 
+// Invalid or driver-rejected requests must not kill a working scan.
+fn accepted_override(requested: Option<f64>, rejected: Option<u64>) -> Option<f64> {
+    requested.filter(|f| f.is_finite() && *f > 0.0 && rejected != Some(f.to_bits()))
+}
+
 /// Builder for a HackRF One source. Wrap in `Box::new(...)` and call
 /// [`SdrSource::start`] from the orchestrator.
 pub struct HackRfSource {
@@ -123,13 +128,29 @@ fn resolve_sample_rate(num_channels: usize, requested_hz: f64) -> Result<(f64, b
             "SourceConfig.channels_hz must not be empty".into(),
         ));
     }
-    let clamped = requested_hz.min(HACKRF_MAX_SAMPLE_RATE_HZ);
-    if clamped <= 0.0 {
+    if !requested_hz.is_finite() || requested_hz < 1.0 {
         return Err(SdrError::BadConfig(format!(
             "invalid sample rate {requested_hz} Hz"
         )));
     }
+    // The driver programs an integer-Hz rate; report exactly that rate.
+    let clamped = requested_hz.min(HACKRF_MAX_SAMPLE_RATE_HZ).floor();
     Ok((clamped, requested_hz > HACKRF_MAX_SAMPLE_RATE_HZ))
+}
+
+fn configure_radio(
+    radio: &mut HackRfOne<hackrfone::UnknownMode>,
+    rate: f64,
+    lna: u16,
+    vga: u16,
+    amp: bool,
+    bias: bool,
+) -> Result<(), hackrfone::Error> {
+    radio.set_sample_rate(rate as u32, 1)?;
+    radio.set_lna_gain(lna)?;
+    radio.set_vga_gain(vga)?;
+    radio.set_amp_enable(amp)?;
+    radio.set_antenna_enable(bias as u8)
 }
 
 impl SdrSource for HackRfSource {
@@ -148,6 +169,16 @@ impl SdrSource for HackRfSource {
             );
         }
 
+        if config
+            .channels_hz
+            .iter()
+            .any(|f| !f.is_finite() || *f < 1.0 || *f >= u64::MAX as f64)
+        {
+            return Err(SdrError::BadConfig(
+                "channel frequencies must be finite, positive integer-Hz representable values"
+                    .into(),
+            ));
+        }
         let mut radio = HackRfOne::new().ok_or_else(|| {
             SdrError::NotFound(
                 "No HackRF One found. Ensure it is connected and not claimed by another process."
@@ -164,21 +195,15 @@ impl SdrSource for HackRfSource {
             self.bias_tee
         );
 
-        radio
-            .set_sample_rate(sample_rate as u32, 1)
-            .map_err(|e| SdrError::BadConfig(format!("set_sample_rate({sample_rate}): {e:?}")))?;
-        radio
-            .set_lna_gain(self.lna_gain)
-            .map_err(|e| SdrError::BadConfig(format!("set_lna_gain({}): {e:?}", self.lna_gain)))?;
-        radio
-            .set_vga_gain(self.vga_gain)
-            .map_err(|e| SdrError::BadConfig(format!("set_vga_gain({}): {e:?}", self.vga_gain)))?;
-        radio
-            .set_amp_enable(self.amp_enable)
-            .map_err(|e| SdrError::BadConfig(format!("set_amp_enable: {e:?}")))?;
-        radio
-            .set_antenna_enable(self.bias_tee as u8)
-            .map_err(|e| SdrError::BadConfig(format!("set_antenna_enable: {e:?}")))?;
+        configure_radio(
+            &mut radio,
+            sample_rate,
+            self.lna_gain,
+            self.vga_gain,
+            self.amp_enable,
+            self.bias_tee,
+        )
+        .map_err(|e| SdrError::BadConfig(format!("HackRF configuration failed: {e:?}")))?;
 
         let dwell_controller = DwellController {
             min: config.dwell_min,
@@ -203,16 +228,15 @@ impl SdrSource for HackRfSource {
             );
         }
 
-        let (tx, receiver) = channel::bounded::<IqPacket>(1024);
+        let (tx, receiver) = channel::bounded::<IqPacket>(64);
         let stop_flag = Arc::new(AtomicBool::new(false));
         let stop_flag_thread = stop_flag.clone();
         let advice_thread = advice;
         let sample_rate_f32 = sample_rate as f32;
 
-        let (pool_tx, pool_rx) = channel::bounded::<Vec<Complex32>>(1024);
-        for _ in 0..1024 {
-            let _ = pool_tx.send(Vec::with_capacity(131072));
-        }
+        // The driver reads at most 128 KiB of bytes (65,536 complex samples).
+        // Allocate on demand, retaining at most 32 MiB in each queue.
+        let (pool_tx, pool_rx) = channel::bounded::<Vec<Complex32>>(64);
 
         let lna_gain = self.lna_gain;
         let vga_gain = self.vga_gain;
@@ -231,6 +255,7 @@ impl SdrSource for HackRfSource {
                     // of the configured dwell.
                     let mut device_opt = Some(radio); // Option<HackRfOne<UnknownMode>>
                     let mut channel_idx = 0usize;
+                    let mut last_rejected_override = None;
                     let mut last_report = Instant::now();
                     let mut channel_switches = 0u64;
                     let mut consecutive_failures = 0;
@@ -277,41 +302,30 @@ impl SdrSource for HackRfSource {
                         }
 
                         if device_opt.is_none() {
-                            if let Some(mut new_radio) = hackrfone::HackRfOne::new() {
-                                if let Err(e2) = new_radio.set_sample_rate(sample_rate as u32, 1) {
-                                    tracing::error!(
-                                        "[hackrf] Failed to re-set sample rate: {:?}",
-                                        e2
-                                    );
+                            let reopened = HackRfOne::new().and_then(|mut device| {
+                                match configure_radio(
+                                    &mut device,
+                                    sample_rate,
+                                    lna_gain,
+                                    vga_gain,
+                                    amp_enable,
+                                    bias_tee,
+                                ) {
+                                    Ok(()) => Some(device),
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "[hackrf] recovery configuration failed: {e:?}"
+                                        );
+                                        None
+                                    }
                                 }
-                                if let Err(e2) = new_radio.set_lna_gain(lna_gain) {
-                                    tracing::error!("[hackrf] Failed to re-set LNA gain: {:?}", e2);
-                                }
-                                if let Err(e2) = new_radio.set_vga_gain(vga_gain) {
-                                    tracing::error!("[hackrf] Failed to re-set VGA gain: {:?}", e2);
-                                }
-                                if let Err(e2) = new_radio.set_amp_enable(amp_enable) {
-                                    tracing::error!(
-                                        "[hackrf] Failed to re-set amp enable: {:?}",
-                                        e2
-                                    );
-                                }
-                                if let Err(e2) = new_radio.set_antenna_enable(bias_tee as u8) {
-                                    tracing::error!(
-                                        "[hackrf] Failed to re-set antenna enable: {:?}",
-                                        e2
-                                    );
-                                }
-                                device_opt = Some(new_radio);
-                            } else {
-                                tracing::error!(
-                                    "[hackrf] Failed to re-open HackRF device. Retrying in 100ms."
-                                );
-                                thread::sleep(Duration::from_millis(100));
+                            });
+                            if reopened.is_none() {
                                 consecutive_failures += 1;
-                                channel_idx = (channel_idx + 1) % num_channels;
+                                thread::sleep(Duration::from_millis(100));
                                 continue;
                             }
+                            device_opt = reopened;
                         }
 
                         let mut device = device_opt.take().unwrap();
@@ -319,7 +333,10 @@ impl SdrSource for HackRfSource {
                         // hold, bypassing the hop list entirely, until the override changes
                         // or clears. `channel_idx` isn't touched while parked, so hopping
                         // resumes exactly where it left off once the viewer disconnects.
-                        let override_freq = advice_thread.channel_override();
+                        let override_freq = accepted_override(
+                            advice_thread.channel_override(),
+                            last_rejected_override,
+                        );
                         let current_freq_hz = override_freq.unwrap_or(channels_hz[channel_idx]);
                         let freq_key = freq_key_khz(current_freq_hz);
                         if let Err(e) = device.set_freq(current_freq_hz as u64) {
@@ -329,6 +346,10 @@ impl SdrSource for HackRfSource {
                                 e
                             );
                             device_opt = Some(device);
+                            if override_freq.is_some() {
+                                last_rejected_override = Some(current_freq_hz.to_bits());
+                                continue;
+                            }
                             consecutive_failures += 1;
                             channel_idx = (channel_idx + 1) % num_channels;
                             continue;
@@ -344,43 +365,7 @@ impl SdrSource for HackRfSource {
                                 );
                                 consecutive_failures += 1;
                                 thread::sleep(Duration::from_millis(100));
-                                if let Some(mut new_radio) = hackrfone::HackRfOne::new() {
-                                    if let Err(e2) =
-                                        new_radio.set_sample_rate(sample_rate as u32, 1)
-                                    {
-                                        tracing::error!(
-                                            "[hackrf] Failed to re-set sample rate: {:?}",
-                                            e2
-                                        );
-                                    }
-                                    if let Err(e2) = new_radio.set_lna_gain(lna_gain) {
-                                        tracing::error!(
-                                            "[hackrf] Failed to re-set LNA gain: {:?}",
-                                            e2
-                                        );
-                                    }
-                                    if let Err(e2) = new_radio.set_vga_gain(vga_gain) {
-                                        tracing::error!(
-                                            "[hackrf] Failed to re-set VGA gain: {:?}",
-                                            e2
-                                        );
-                                    }
-                                    if let Err(e2) = new_radio.set_amp_enable(amp_enable) {
-                                        tracing::error!(
-                                            "[hackrf] Failed to re-set amp enable: {:?}",
-                                            e2
-                                        );
-                                    }
-                                    if let Err(e2) = new_radio.set_antenna_enable(bias_tee as u8) {
-                                        tracing::error!(
-                                            "[hackrf] Failed to re-set antenna enable: {:?}",
-                                            e2
-                                        );
-                                    }
-                                    device_opt = Some(new_radio);
-                                } else {
-                                    tracing::error!("[hackrf] Failed to re-open HackRF device.");
-                                }
+                                // Re-open and fully configure at the next outer iteration.
                                 channel_idx = (channel_idx + 1) % num_channels;
                                 continue;
                             }
@@ -399,28 +384,16 @@ impl SdrSource for HackRfSource {
                                     .stop_rx()
                                     .map_err(|e| anyhow::anyhow!("stop_rx: {e:?}"))?;
                             }
-                            let still_overridden =
-                                advice_thread.channel_override() == Some(current_freq_hz);
-                            if override_freq.is_some() {
-                                // Parked here for live view: hold regardless of the dwell
-                                // deadline, same as the single-channel case below, but break
-                                // out the moment the viewer's channel changes or they
-                                // disconnect (`channel_override()` now differs) so the outer
-                                // loop can retune or resume hopping.
-                                if !still_overridden {
-                                    break rx
-                                        .stop_rx()
-                                        .map_err(|e| anyhow::anyhow!("stop_rx: {e:?}"))?;
-                                }
-                            } else if still_overridden {
-                                // A viewer just requested this exact channel while we were
-                                // still mid-hop-dwell here — break out now (rather than
-                                // waiting for the normal dwell deadline) so the next outer
-                                // iteration parks on it promptly.
+                            let next_override = accepted_override(
+                                advice_thread.channel_override(),
+                                last_rejected_override,
+                            );
+                            if next_override != override_freq {
                                 break rx
                                     .stop_rx()
                                     .map_err(|e| anyhow::anyhow!("stop_rx: {e:?}"))?;
-                            } else if num_channels > 1 {
+                            }
+                            if override_freq.is_none() && num_channels > 1 {
                                 // With a single channel there is nowhere to hop, so
                                 // never tear the RX down on the dwell deadline —
                                 // stream continuously instead. Otherwise a
@@ -442,14 +415,20 @@ impl SdrSource for HackRfSource {
 
                             match rx.rx() {
                                 Ok(bytes) => {
+                                    if bytes.len() < 2 {
+                                        consecutive_stream_failures += 1;
+                                        break rx
+                                            .stop_rx()
+                                            .map_err(|e| anyhow::anyhow!("stop_rx: {e:?}"))?;
+                                    }
                                     // Interleaved signed 8-bit I, Q → Complex32 in
-                                    // [-1, 1). `chunks_exact(2)` drops a trailing
+                                    // [-1, 1). `as_chunks::<2>()` drops a trailing
                                     // odd byte (never expected from the device).
                                     let mut samples = pool_rx
                                         .try_recv()
-                                        .unwrap_or_else(|_| Vec::with_capacity(131072));
+                                        .unwrap_or_else(|_| Vec::with_capacity(65536));
                                     samples.clear();
-                                    samples.extend(bytes.chunks_exact(2).map(|c| {
+                                    samples.extend(bytes.as_chunks::<2>().0.iter().map(|c| {
                                         Complex32::new(i8_to_unit(c[0]), i8_to_unit(c[1]))
                                     }));
                                     if !samples.is_empty() {
@@ -629,6 +608,34 @@ mod stream_failure_bounding_tests {
         assert!(
             worst <= Duration::from_secs(2),
             "should abandon a dead device in seconds, not {worst:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod review_regressions {
+    use super::*;
+    #[test]
+    fn rate_matches_the_integer_programmed_into_the_driver() {
+        assert_eq!(
+            resolve_sample_rate(1, 10_000_000.75).unwrap(),
+            (10_000_000.0, false)
+        );
+        for rate in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.5] {
+            assert!(resolve_sample_rate(1, rate).is_err());
+        }
+    }
+    #[test]
+    fn override_changes_are_detected_and_rejected_requests_are_ignored() {
+        assert_ne!(None, accepted_override(Some(915e6), None));
+        assert_ne!(Some(915e6), accepted_override(Some(433e6), None));
+        assert_ne!(Some(915e6), accepted_override(None, None));
+        for f in [f64::NAN, f64::INFINITY, -1.0, 0.0] {
+            assert_eq!(None, accepted_override(Some(f), None));
+        }
+        assert_eq!(
+            None,
+            accepted_override(Some(915e6), Some(915e6_f64.to_bits()))
         );
     }
 }

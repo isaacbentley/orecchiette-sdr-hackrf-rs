@@ -44,7 +44,7 @@ Because the HackRF provides ~4 fewer bits of dynamic range than a 12-bit SDR (li
 
 ### USB Constraints and Overruns
 The HackRF operates over USB 2.0. At sample rates above 20 MSPS, the bulk transport heavily drops samples.
-- **Clamping**: The `start()` function hard-clamps requested sample rates to `20_000_000.0` Hz.
+- **Clamping**: The `start()` function rejects non-finite rates and rates below 1 Hz, clamps to `20_000_000.0` Hz, and rounds down to the integer rate programmed into the driver. Packet metadata uses that same rate.
 - **Overruns**: The underlying USB bulk read implementation does not surface dropped-sample hardware flags. Consequently, `IqPacket::overrun` is permanently emitted as `false`, and overruns will manifest as silent phase discontinuities rather than triggering orchestrator-level rate step-downs.
 
 ### Failure Handling
